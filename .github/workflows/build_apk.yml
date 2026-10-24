@@ -12,29 +12,42 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Unpack Project Safely
-        run: |
-          ls -la
-          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file was not committed to the repository!"
-            exit 1
-          fi
-          unzip -q -o "$ZIP_FILE" -d unpacked_dir
-          cp -rf unpacked_dir/UltraDownloader/* . || cp -rf unpacked_dir/* .
-          rm -rf unpacked_dir
-          python3 -c '
-          s = open("settings.gradle.kts").read().replace("\\\\\\\\", "\\\\")
-          open("settings.gradle.kts", "w").write(s)
-          b = open("app/build.gradle.kts").read().replace("\\\"$backendBaseUrl\\\"", "\"\\\"$backendBaseUrl\\\"\"").replace("\"\"\\\"", "\"\\\"")
-          open("app/build.gradle.kts", "w").write(b)
-          '
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+
+      - name: Setup Android SDK & Accept Licenses
+        uses: android-actions/setup-android@v3
+
+      - name: Accept All Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Unpack Project & Fix XML/Gradle Syntax
+        run: |
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          unzip -q -o "$ZIP_FILE" -d unpacked_dir
+          cp -rf unpacked_dir/UltraDownloader/* . || cp -rf unpacked_dir/* .
+          rm -rf unpacked_dir
+          python3 - << 'PYEOF'
+          # 1. Fix settings.gradle.kts regex escapes
+          s = open("settings.gradle.kts").read().replace("\\\\\\\\", "\\\\")
+          open("settings.gradle.kts", "w").write(s)
+
+          # 2. Fix app/build.gradle.kts buildConfigField quotes
+          b = open("app/build.gradle.kts").read()
+          b = b.replace('\\"\\"$backendBaseUrl\\"\\"', '\\"$backendBaseUrl\\"')
+          b = b.replace('\\\\"$backendBaseUrl\\\\"', '\\"$backendBaseUrl\\"')
+          open("app/build.gradle.kts", "w").write(b)
+
+          # 3. Escape any unescaped apostrophes in strings.xml for AAPT2
+          for p in ["app/src/main/res/values/strings.xml", "app/src/main/res/values-ar/strings.xml"]:
+              txt = open(p).read()
+              txt = txt.replace("\\'", "'").replace("'", "\\'")
+              txt = txt.replace('version=\\"1.0\\" encoding=\\"utf-8\\"', 'version="1.0" encoding="utf-8"')
+              open(p, "w").write(txt)
+          PYEOF
 
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v3
@@ -49,3 +62,4 @@ jobs:
         with:
           name: UltraDownloader-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          
